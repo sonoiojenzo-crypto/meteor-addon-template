@@ -2,6 +2,7 @@ package com.example.addon;
 
 import com.example.addon.commands.CommandExample;
 import com.example.addon.hud.HudExample;
+import com.example.addon.modules.AutoSheepFarm;
 import com.example.addon.modules.ModuleExample;
 import com.example.addon.modules.SheepEsp;
 import com.mojang.logging.LogUtils;
@@ -26,6 +27,7 @@ public class AddonTemplate extends MeteorAddon {
         // Modules
         Modules.get().add(new ModuleExample());
         Modules.get().add(new SheepEsp());
+        Modules.get().add(new AutoSheepFarm());
 
         // Commands
         Commands.add(new CommandExample());
