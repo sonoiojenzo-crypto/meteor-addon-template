@@ -1,3 +1,4 @@
+
 package com.example.addon.modules;
 
 import com.example.addon.AddonTemplate;
