@@ -9,10 +9,12 @@ import meteordevelopment.orbit.EventHandler;
 import net.minecraft.client.gui.screen.ingame.HandledScreen;
 import net.minecraft.entity.Entity;
 import net.minecraft.entity.passive.SheepEntity;
+import net.minecraft.item.ItemStack;
 import net.minecraft.item.Items;
 import net.minecraft.screen.ScreenHandler;
 import net.minecraft.screen.slot.SlotActionType;
 import net.minecraft.util.Hand;
+import net.minecraft.util.math.Vec3d;
 
 public class AutoSheepFarm extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
@@ -47,63 +49,99 @@ public class AutoSheepFarm extends Module {
         .build()
     );
 
-    private final Setting<Integer> pageClicks = sgGeneral.add(new IntSetting.Builder()
-        .name("click-pagina")
-        .description("Quante volte cliccare il vetro blu per arrivare alla lana.")
-        .defaultValue(5)
+    private final Setting<Integer> containerSize = sgGeneral.add(new IntSetting.Builder()
+        .name("slot-totali-pagina")
+        .description("Quanti slot ha la parte shop di ogni pagina (senza il tuo inventario).")
+        .defaultValue(18)
         .build()
     );
 
     private final Setting<Integer> nextPageSlot = sgGeneral.add(new IntSetting.Builder()
         .name("slot-pagina-successiva")
         .description("Slot del vetro blu 'Pagina Successiva' (parte da 0).")
-        .defaultValue(5)
+        .defaultValue(14)
         .build()
     );
 
-    private final Setting<Integer> woolSlot = sgGeneral.add(new IntSetting.Builder()
-        .name("slot-lana")
-        .description("Slot della lana nella pagina finale (parte da 0).")
-        .defaultValue(0)
+    private final Setting<Integer> maxPageAttempts = sgGeneral.add(new IntSetting.Builder()
+        .name("max-pagine")
+        .description("Numero massimo di pagine da provare prima di arrendersi.")
+        .defaultValue(10)
+        .build()
+    );
+
+    private final Setting<String> woolName = sgGeneral.add(new StringSetting.Builder()
+        .name("nome-lana")
+        .description("Testo da cercare nel nome dell'oggetto lana nello shop.")
+        .defaultValue("wool")
         .build()
     );
 
     private final Setting<Integer> emeraldSlot = sgGeneral.add(new IntSetting.Builder()
         .name("slot-smeraldo")
         .description("Slot dello smeraldo 'conferma vendita' (parte da 0).")
-        .defaultValue(31) // il tuo slot 32 (contando da 1) = slot 31 (contando da 0)
+        .defaultValue(31)
+        .build()
+    );
+
+    private final Setting<Double> moveSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("velocita-recupero")
+        .description("Velocità con cui ti sposti verso la lana caduta.")
+        .defaultValue(0.25)
+        .min(0.05).max(0.5)
+        .build()
+    );
+
+    private final Setting<Integer> moveTimeout = sgGeneral.add(new IntSetting.Builder()
+        .name("timeout-recupero")
+        .description("Tick massimi spesi a camminare verso la lana prima di rinunciare (20 = 1 secondo).")
+        .defaultValue(60)
+        .build()
+    );
+
+    private final Setting<Double> arrivalDistance = sgGeneral.add(new DoubleSetting.Builder()
+        .name("distanza-arrivo")
+        .description("Quando sei abbastanza vicino da fermarti e considerare la lana raccolta.")
+        .defaultValue(1.3)
+        .min(0.5).max(4.0)
         .build()
     );
 
     private enum State {
-        IDLE, TARGETING, SHEAR, WAIT_AFTER_SHEAR,
-        OPEN_SHOP, WAIT_SHOP_OPEN, PAGING,
+        IDLE, TARGETING, SHEAR, WAIT_AFTER_SHEAR, MOVE_TO_LOOT,
+        OPEN_SHOP, WAIT_SHOP_OPEN, SEARCH_WOOL,
         OPEN_SELL_MENU, WAIT_SELL_MENU, CONFIRM_SELL,
         CLOSE
     }
 
     private State state = State.IDLE;
     private Entity target;
+    private Vec3d lootPos;
     private int delayTicks = 0;
-    private int pageClicksDone = 0;
+    private int moveTicks = 0;
+    private int pageAttempts = 0;
+    private int foundWoolSlot = -1;
 
     public AutoSheepFarm() {
-        super(AddonTemplate.CATEGORY, "auto-sheep-farm", "Sheara automaticamente pecore a stack pieno e vende la lana.");
+        super(AddonTemplate.CATEGORY, "auto-sheep-farm", "Sheara automaticamente pecore a stack pieno, recupera la lana e la vende.");
     }
 
     @Override
     public void onActivate() {
         state = State.IDLE;
         target = null;
+        lootPos = null;
         delayTicks = 0;
-        pageClicksDone = 0;
+        moveTicks = 0;
+        pageAttempts = 0;
+        foundWoolSlot = -1;
     }
 
     @EventHandler
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
-        if (delayTicks > 0) {
+        if (delayTicks > 0 && state != State.MOVE_TO_LOOT) {
             delayTicks--;
             return;
         }
@@ -112,10 +150,14 @@ public class AutoSheepFarm extends Module {
             case IDLE -> findTarget();
             case TARGETING -> rotateToTarget();
             case SHEAR -> shear();
-            case WAIT_AFTER_SHEAR -> state = State.OPEN_SHOP;
+            case WAIT_AFTER_SHEAR -> {
+                moveTicks = 0;
+                state = State.MOVE_TO_LOOT;
+            }
+            case MOVE_TO_LOOT -> moveToLoot();
             case OPEN_SHOP -> openShop();
             case WAIT_SHOP_OPEN -> checkShopOpen();
-            case PAGING -> clickNextPage();
+            case SEARCH_WOOL -> searchWool();
             case OPEN_SELL_MENU -> openSellMenu();
             case WAIT_SELL_MENU -> checkSellMenuOpen();
             case CONFIRM_SELL -> confirmSell();
@@ -166,6 +208,8 @@ public class AutoSheepFarm extends Module {
 
         equipShears();
 
+        lootPos = target.getPos();
+
         mc.interactionManager.interactEntity(mc.player, target, Hand.MAIN_HAND);
         mc.player.swingHand(Hand.MAIN_HAND);
 
@@ -182,48 +226,92 @@ public class AutoSheepFarm extends Module {
         }
     }
 
+    // Cammina in linea retta verso il punto dove è stata shearata la pecora,
+    // per raccogliere la lana caduta se troppo lontana per la raccolta automatica.
+    private void moveToLoot() {
+        if (lootPos == null) {
+            state = State.OPEN_SHOP;
+            return;
+        }
+
+        double dx = lootPos.x - mc.player.getX();
+        double dz = lootPos.z - mc.player.getZ();
+        double distSq = dx * dx + dz * dz;
+
+        if (distSq <= arrivalDistance.get() * arrivalDistance.get() || moveTicks >= moveTimeout.get()) {
+            delayTicks = actionDelay.get();
+            state = State.OPEN_SHOP;
+            return;
+        }
+
+        double dist = Math.sqrt(distSq);
+        double speed = moveSpeed.get();
+        double vx = (dx / dist) * speed;
+        double vz = (dz / dist) * speed;
+
+        mc.player.setVelocity(vx, mc.player.getVelocity().y, vz);
+        moveTicks++;
+    }
+
     private void openShop() {
         mc.player.networkHandler.sendChatCommand(shopCommand.get());
         delayTicks = actionDelay.get() * 3;
+        pageAttempts = 0;
         state = State.WAIT_SHOP_OPEN;
     }
 
     private void checkShopOpen() {
         if (mc.currentScreen instanceof HandledScreen<?>) {
-            pageClicksDone = 0;
-            state = State.PAGING;
+            state = State.SEARCH_WOOL;
         } else {
             delayTicks = actionDelay.get();
         }
     }
 
-    private void clickNextPage() {
+    // Cerca la lana per NOME nella pagina corrente. Se non la trova,
+    // clicca "pagina successiva" e riprova, fino a un massimo di tentativi.
+    private void searchWool() {
         if (!(mc.currentScreen instanceof HandledScreen<?> screen)) {
             state = State.IDLE;
             return;
         }
 
-        if (pageClicksDone >= pageClicks.get()) {
-            state = State.OPEN_SELL_MENU;
+        ScreenHandler handler = screen.getScreenHandler();
+        String needle = woolName.get().toLowerCase();
+
+        for (int i = 0; i < containerSize.get(); i++) {
+            ItemStack stack = handler.getSlot(i).getStack();
+            if (stack.isEmpty()) continue;
+
+            String name = stack.getName().getString().toLowerCase();
+            if (name.contains(needle)) {
+                foundWoolSlot = i;
+                state = State.OPEN_SELL_MENU;
+                return;
+            }
+        }
+
+        pageAttempts++;
+        if (pageAttempts >= maxPageAttempts.get()) {
+            // non trovata dopo troppe pagine, ci fermiamo per sicurezza
+            mc.player.closeHandledScreen();
+            state = State.IDLE;
             return;
         }
 
-        ScreenHandler handler = screen.getScreenHandler();
         mc.interactionManager.clickSlot(handler.syncId, nextPageSlot.get(), 0, SlotActionType.PICKUP, mc.player);
-
-        pageClicksDone++;
         delayTicks = actionDelay.get();
     }
 
-    // Click DESTRO sulla lana per aprire il menu "Vendi > White Wool"
+    // Click DESTRO sulla lana trovata per aprire il menu "Vendi > White Wool"
     private void openSellMenu() {
-        if (!(mc.currentScreen instanceof HandledScreen<?> screen)) {
+        if (!(mc.currentScreen instanceof HandledScreen<?> screen) || foundWoolSlot < 0) {
             state = State.IDLE;
             return;
         }
 
         ScreenHandler handler = screen.getScreenHandler();
-        mc.interactionManager.clickSlot(handler.syncId, woolSlot.get(), 1, SlotActionType.PICKUP, mc.player);
+        mc.interactionManager.clickSlot(handler.syncId, foundWoolSlot, 1, SlotActionType.PICKUP, mc.player);
 
         delayTicks = actionDelay.get() * 2;
         state = State.WAIT_SELL_MENU;
@@ -254,6 +342,8 @@ public class AutoSheepFarm extends Module {
     private void closeShop() {
         mc.player.closeHandledScreen();
         target = null;
+        lootPos = null;
+        foundWoolSlot = -1;
         state = State.IDLE;
     }
 }
