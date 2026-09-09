@@ -22,7 +22,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Double> interactRadius = sgGeneral.add(new DoubleSetting.Builder()
         .name("raggio-interazione")
-        .description("Distanza massima per shearare in sicurezza (tienilo basso per evitare kick per reach).")
+        .description("Distanza massima per shearare in sicurezza.")
         .defaultValue(3.0)
         .min(1.0).max(4.5)
         .build()
@@ -46,7 +46,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Integer> wanderTimeout = sgGeneral.add(new IntSetting.Builder()
         .name("timeout-ricerca")
-        .description("Tick massimi spesi a camminare verso una pecora lontana prima di riprovare da capo (20 = 1 secondo).")
+        .description("Tick massimi spesi a camminare verso una pecora lontana prima di riprovare da capo.")
         .defaultValue(200)
         .build()
     );
@@ -66,6 +66,14 @@ public class AutoSheepFarm extends Module {
         .build()
     );
 
+    private final Setting<Integer> scanInterval = sgGeneral.add(new IntSetting.Builder()
+        .name("intervallo-scansione")
+        .description("Ogni quanti tick rifare le ricerche pesanti (entità nel mondo). Più alto = meno carico, meno reattivo.")
+        .defaultValue(4)
+        .min(1).max(20)
+        .build()
+    );
+
     private final Setting<String> shopCommand = sgGeneral.add(new StringSetting.Builder()
         .name("comando-shop")
         .description("Comando per aprire lo shop, senza la barra iniziale.")
@@ -75,7 +83,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Integer> containerSize = sgGeneral.add(new IntSetting.Builder()
         .name("slot-totali-pagina")
-        .description("Quanti slot ha la parte shop di ogni pagina (senza il tuo inventario).")
+        .description("Quanti slot ha la parte shop di ogni pagina.")
         .defaultValue(18)
         .build()
     );
@@ -96,7 +104,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<String> woolName = sgGeneral.add(new StringSetting.Builder()
         .name("nome-lana")
-        .description("Testo da cercare nel nome dell'oggetto lana (sia nello shop che a terra/inventario).")
+        .description("Testo da cercare nel nome dell'oggetto lana.")
         .defaultValue("wool")
         .build()
     );
@@ -126,7 +134,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Integer> moveTimeout = sgGeneral.add(new IntSetting.Builder()
         .name("timeout-recupero")
-        .description("Tick massimi spesi a inseguire la lana prima di rinunciare (20 = 1 secondo).")
+        .description("Tick massimi spesi a inseguire la lana prima di rinunciare.")
         .defaultValue(60)
         .build()
     );
@@ -141,7 +149,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Integer> maxWaitRetries = sgGeneral.add(new IntSetting.Builder()
         .name("max-attese")
-        .description("Numero massimo di tentativi di attesa (GUI shop/vendita) prima di arrendersi e resettare.")
+        .description("Tentativi massimi di attesa GUI prima di arrendersi e resettare.")
         .defaultValue(15)
         .build()
     );
@@ -155,11 +163,13 @@ public class AutoSheepFarm extends Module {
 
     private State state = State.IDLE;
     private Entity target;
+    private Entity cachedLootItem;
     private int delayTicks = 0;
     private int moveTicks = 0;
     private int wanderTicks = 0;
     private int pageAttempts = 0;
     private int waitRetries = 0;
+    private int scanCooldown = 0;
     private int foundWoolSlot = -1;
 
     public AutoSheepFarm() {
@@ -171,17 +181,16 @@ public class AutoSheepFarm extends Module {
         resetState();
     }
 
-    // Resetta completamente il modulo: usato sia all'attivazione, sia ogni volta
-    // che ti connetti/riconnetti a un mondo, per evitare che resti bloccato
-    // in uno stato "congelato" da prima del rejoin.
     private void resetState() {
         state = State.IDLE;
         target = null;
+        cachedLootItem = null;
         delayTicks = 0;
         moveTicks = 0;
         wanderTicks = 0;
         pageAttempts = 0;
         waitRetries = 0;
+        scanCooldown = 0;
         foundWoolSlot = -1;
     }
 
@@ -220,7 +229,29 @@ public class AutoSheepFarm extends Module {
         }
     }
 
+    // Ordine di priorità: 1) lana a terra vicina, 2) lana già in inventario da vendere,
+    // 3) solo alla fine cerca una nuova pecora. Così anche dopo un rejoin/kick,
+    // il modulo prima "pulisce" quello che era rimasto indietro invece di ignorarlo.
     private void handleIdle() {
+        if (scanCooldown > 0) {
+            scanCooldown--;
+            return;
+        }
+        scanCooldown = scanInterval.get();
+
+        Entity loot = findNearestWoolItem();
+        if (loot != null) {
+            cachedLootItem = loot;
+            moveTicks = 0;
+            state = State.MOVE_TO_LOOT;
+            return;
+        }
+
+        if (hasWoolInInventory()) {
+            state = State.OPEN_SHOP;
+            return;
+        }
+
         Entity nearby = findValidSheep(interactRadius.get());
         if (nearby != null) {
             target = nearby;
@@ -347,10 +378,19 @@ public class AutoSheepFarm extends Module {
         return found;
     }
 
+    // Ricalcola la posizione della lana solo ogni "intervallo-scansione" tick invece
+    // che ad ogni singolo tick, per ridurre il carico sul dispositivo.
     private void moveToLoot() {
-        Entity woolItem = findNearestWoolItem();
+        if (scanCooldown <= 0) {
+            cachedLootItem = findNearestWoolItem();
+            scanCooldown = scanInterval.get();
+        } else {
+            scanCooldown--;
+        }
 
-        if (woolItem == null || moveTicks >= moveTimeout.get()) {
+        Entity woolItem = cachedLootItem;
+
+        if (woolItem == null || !woolItem.isAlive() || moveTicks >= moveTimeout.get()) {
             delayTicks = actionDelay.get();
             proceedAfterLoot();
             return;
