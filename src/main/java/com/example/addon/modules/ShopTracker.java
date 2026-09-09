@@ -1,9 +1,9 @@
-package com.example.addon.modules; // <-- cambia con il tuo package reale
+package com.example.addon.modules;
 
+import com.example.addon.AddonTemplate;
 import meteordevelopment.meteorclient.events.game.ReceiveMessageEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
-import meteordevelopment.meteorclient.systems.modules.Categories;
 import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
@@ -70,7 +70,7 @@ public class ShopTracker extends Module {
     private Pattern compiledBuy;
 
     public ShopTracker() {
-        super(Categories.Misc, "shop-tracker", "Traccia guadagni/spese dello shop e stampa uno scontrino periodico.");
+        super(AddonTemplate.CATEGORY, "shop-tracker", "Traccia guadagni/spese dello shop e stampa uno scontrino periodico.");
     }
 
     @Override
