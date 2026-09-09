@@ -15,18 +15,18 @@ public class ShopTracker extends Module {
 
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
-    // ----- Pattern per riconoscere i messaggi dello shop -----
-    private final Setting<String> sellRegex = sgGeneral.add(new StringSetting.Builder()
-        .name("regex-vendita")
-        .description("Regex per riconoscere il messaggio di vendita. Gruppo 1 = quantità, Gruppo 2 = item, Gruppo 3 = importo.")
-        .defaultValue("Hai venduto (\\d+)x (.+) per \\$([0-9.,]+) con successo")
+    // ----- Parole chiave da cercare nel messaggio (ripulito da simboli/colori) -----
+    private final Setting<String> sellKeyword = sgGeneral.add(new StringSetting.Builder()
+        .name("parola-vendita")
+        .description("Parola chiave che identifica un messaggio di vendita.")
+        .defaultValue("venduto")
         .build()
     );
 
-    private final Setting<String> buyRegex = sgGeneral.add(new StringSetting.Builder()
-        .name("regex-acquisto")
-        .description("Regex per riconoscere il messaggio di acquisto. Gruppo 1 = quantità, Gruppo 2 = item, Gruppo 3 = importo.")
-        .defaultValue("Hai acquistato (\\d+)x (.+) per \\$([0-9.,]+) con successo")
+    private final Setting<String> buyKeyword = sgGeneral.add(new StringSetting.Builder()
+        .name("parola-acquisto")
+        .description("Parola chiave che identifica un messaggio di acquisto.")
+        .defaultValue("acquistato")
         .build()
     );
 
@@ -34,7 +34,7 @@ public class ShopTracker extends Module {
     private final Setting<String> receiptFormat = sgGeneral.add(new StringSetting.Builder()
         .name("formato-scontrino")
         .description("Usa {earned} e {spent} come segnaposto.")
-        .defaultValue("Nell'ultima ora hai guadagnato ${earned} e hai speso ${spent}!!")
+        .defaultValue("Nell'ultima ora hai guadagnato €{earned} e hai speso €{spent}!!")
         .build()
     );
 
@@ -66,8 +66,10 @@ public class ShopTracker extends Module {
     private double spentThisPeriod = 0;
     private long lastReportTime = 0;
 
-    private Pattern compiledSell;
-    private Pattern compiledBuy;
+    // Rimuove tutto tranne lettere, numeri, spazi, virgole e punti (elimina simboli custom/colori del server)
+    private static final Pattern CLEANUP = Pattern.compile("[^\\p{L}\\p{N}\\s.,]");
+    // Cerca il numero subito dopo la parola "per"
+    private static final Pattern PRICE_PATTERN = Pattern.compile("(?i)per\\s*([0-9.,]+)");
 
     public ShopTracker() {
         super(AddonTemplate.CATEGORY, "shop-tracker", "Traccia guadagni/spese dello shop e stampa uno scontrino periodico.");
@@ -78,22 +80,11 @@ public class ShopTracker extends Module {
         earnedThisPeriod = 0;
         spentThisPeriod = 0;
         lastReportTime = System.currentTimeMillis();
-        compilePatterns();
-    }
-
-    private void compilePatterns() {
-        try {
-            compiledSell = Pattern.compile(sellRegex.get());
-            compiledBuy = Pattern.compile(buyRegex.get());
-        } catch (Exception e) {
-            error("Regex non valida: " + e.getMessage());
-            toggle(); // disattiva il modulo per sicurezza
-        }
     }
 
     private double parseAmount(String raw) {
-        // rimuove separatori delle migliaia (virgola) e simboli, tiene il punto come decimale
-        String cleaned = raw.replace(",", "").replace("$", "").trim();
+        // rimuove i separatori delle migliaia (virgola), tiene il punto come decimale
+        String cleaned = raw.replace(",", "").trim();
         try {
             return Double.parseDouble(cleaned);
         } catch (NumberFormatException e) {
@@ -103,17 +94,26 @@ public class ShopTracker extends Module {
 
     @EventHandler
     private void onMessage(ReceiveMessageEvent event) {
-        String msg = event.getMessage().getString();
+        String raw = event.getMessage().getString();
 
-        Matcher sellMatch = compiledSell.matcher(msg);
-        if (sellMatch.find()) {
-            earnedThisPeriod += parseAmount(sellMatch.group(3));
-            return;
-        }
+        // Pulisce il messaggio da simboli/colori custom del server
+        String cleaned = CLEANUP.matcher(raw).replaceAll("").replaceAll("\\s+", " ").trim();
+        String lower = cleaned.toLowerCase();
 
-        Matcher buyMatch = compiledBuy.matcher(msg);
-        if (buyMatch.find()) {
-            spentThisPeriod += parseAmount(buyMatch.group(3));
+        boolean isSell = lower.contains(sellKeyword.get().toLowerCase());
+        boolean isBuy = lower.contains(buyKeyword.get().toLowerCase());
+
+        if (!isSell && !isBuy) return;
+
+        Matcher priceMatch = PRICE_PATTERN.matcher(cleaned);
+        if (!priceMatch.find()) return;
+
+        double amount = parseAmount(priceMatch.group(1));
+
+        if (isSell) {
+            earnedThisPeriod += amount;
+        } else {
+            spentThisPeriod += amount;
         }
     }
 
@@ -129,9 +129,9 @@ public class ShopTracker extends Module {
                     .replace("{spent}", String.format("%.2f", spentThisPeriod));
 
                 if (sendToServer.get()) {
-                    ChatUtils.sendPlayerMsg(out); // manda come messaggio reale in chat
+                    ChatUtils.sendPlayerMsg(out);
                 } else {
-                    ChatUtils.info(out); // visibile solo a te, in stile Meteor
+                    ChatUtils.info(out);
                 }
             }
 
