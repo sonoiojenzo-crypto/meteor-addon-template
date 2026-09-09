@@ -21,9 +21,32 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Double> radius = sgGeneral.add(new DoubleSetting.Builder()
         .name("raggio")
-        .description("Raggio di ricerca delle pecore.")
+        .description("Raggio entro cui shearare direttamente una pecora.")
         .defaultValue(6.0)
         .min(1.0).max(20.0)
+        .build()
+    );
+
+    private final Setting<Double> wanderRadius = sgGeneral.add(new DoubleSetting.Builder()
+        .name("raggio-ricerca")
+        .description("Raggio entro cui cercare pecore lontane da raggiungere camminando.")
+        .defaultValue(20.0)
+        .min(1.0).max(64.0)
+        .build()
+    );
+
+    private final Setting<Double> wanderSpeed = sgGeneral.add(new DoubleSetting.Builder()
+        .name("velocita-ricerca")
+        .description("Velocità con cui ti sposti verso una pecora lontana.")
+        .defaultValue(0.22)
+        .min(0.05).max(0.5)
+        .build()
+    );
+
+    private final Setting<Integer> wanderTimeout = sgGeneral.add(new IntSetting.Builder()
+        .name("timeout-ricerca")
+        .description("Tick massimi spesi a camminare verso una pecora lontana prima di riprovare da capo (20 = 1 secondo).")
+        .defaultValue(100)
         .build()
     );
 
@@ -116,7 +139,7 @@ public class AutoSheepFarm extends Module {
     );
 
     private enum State {
-        IDLE, TARGETING, SHEAR, WAIT_AFTER_SHEAR, MOVE_TO_LOOT,
+        IDLE, WANDER, TARGETING, SHEAR, WAIT_AFTER_SHEAR, MOVE_TO_LOOT,
         OPEN_SHOP, WAIT_SHOP_OPEN, SEARCH_WOOL,
         OPEN_SELL_MENU, WAIT_SELL_MENU, CONFIRM_SELL,
         CLOSE
@@ -126,11 +149,12 @@ public class AutoSheepFarm extends Module {
     private Entity target;
     private int delayTicks = 0;
     private int moveTicks = 0;
+    private int wanderTicks = 0;
     private int pageAttempts = 0;
     private int foundWoolSlot = -1;
 
     public AutoSheepFarm() {
-        super(AddonTemplate.CATEGORY, "auto-sheep-farm", "Sheara automaticamente pecore a stack pieno, recupera la lana e la vende.");
+        super(AddonTemplate.CATEGORY, "auto-sheep-farm", "Cerca pecore a stack pieno, le sheara, recupera la lana e la vende.");
     }
 
     @Override
@@ -139,6 +163,7 @@ public class AutoSheepFarm extends Module {
         target = null;
         delayTicks = 0;
         moveTicks = 0;
+        wanderTicks = 0;
         pageAttempts = 0;
         foundWoolSlot = -1;
     }
@@ -147,13 +172,15 @@ public class AutoSheepFarm extends Module {
     private void onTick(TickEvent.Post event) {
         if (mc.player == null || mc.world == null) return;
 
-        if (delayTicks > 0 && state != State.MOVE_TO_LOOT) {
+        boolean movementState = state == State.MOVE_TO_LOOT || state == State.WANDER;
+        if (delayTicks > 0 && !movementState) {
             delayTicks--;
             return;
         }
 
         switch (state) {
-            case IDLE -> findTarget();
+            case IDLE -> handleIdle();
+            case WANDER -> wander();
             case TARGETING -> rotateToTarget();
             case SHEAR -> shear();
             case WAIT_AFTER_SHEAR -> {
@@ -171,10 +198,29 @@ public class AutoSheepFarm extends Module {
         }
     }
 
-    // MODIFICATA: ora salta le pecore già tosate con sheep.isSheared()
-    private void findTarget() {
+    // Prima cerca una pecora valida vicina (pronta a shearare subito).
+    // Se non c'è, cerca una pecora valida più lontana e inizia a camminarci verso.
+    private void handleIdle() {
+        Entity nearby = findValidSheep(radius.get());
+        if (nearby != null) {
+            target = nearby;
+            state = State.TARGETING;
+            return;
+        }
+
+        Entity far = findValidSheep(wanderRadius.get());
+        if (far != null) {
+            target = far;
+            wanderTicks = 0;
+            state = State.WANDER;
+        }
+        // se non trova nulla nemmeno nel raggio ampio, resta IDLE e riprova al prossimo tick
+    }
+
+    // Cerca la pecora valida (non tosata, nome corrispondente) più vicina entro il raggio dato.
+    private Entity findValidSheep(double searchRadius) {
         String needle = stackAmount.get() + "x";
-        double best = radius.get() * radius.get();
+        double best = searchRadius * searchRadius;
         Entity found = null;
 
         for (Entity entity : mc.world.getEntities()) {
@@ -190,10 +236,41 @@ public class AutoSheepFarm extends Module {
             }
         }
 
-        if (found != null) {
-            target = found;
-            state = State.TARGETING;
+        return found;
+    }
+
+    // Cammina in linea retta verso la pecora bersaglio finché non è nel raggio di interazione.
+    private void wander() {
+        if (target == null || !target.isAlive() || (target instanceof SheepEntity s && s.isSheared())) {
+            state = State.IDLE;
+            return;
         }
+
+        double dist = mc.player.distanceTo(target);
+
+        if (dist <= radius.get()) {
+            state = State.TARGETING;
+            return;
+        }
+
+        if (wanderTicks >= wanderTimeout.get()) {
+            // bloccato troppo a lungo (probabile ostacolo): ferma tutto e riprova da capo
+            target = null;
+            state = State.IDLE;
+            delayTicks = actionDelay.get() * 2;
+            return;
+        }
+
+        double dx = target.getX() - mc.player.getX();
+        double dz = target.getZ() - mc.player.getZ();
+        double horizDist = Math.sqrt(dx * dx + dz * dz);
+
+        if (horizDist > 0.001) {
+            double speed = wanderSpeed.get();
+            mc.player.setVelocity((dx / horizDist) * speed, mc.player.getVelocity().y, (dz / horizDist) * speed);
+        }
+
+        wanderTicks++;
     }
 
     private void rotateToTarget() {
