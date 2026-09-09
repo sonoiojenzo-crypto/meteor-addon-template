@@ -8,6 +8,9 @@ import meteordevelopment.meteorclient.systems.modules.Module;
 import meteordevelopment.meteorclient.utils.player.ChatUtils;
 import meteordevelopment.orbit.EventHandler;
 
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.StringJoiner;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -33,8 +36,8 @@ public class ShopTracker extends Module {
     // ----- Impostazioni scontrino -----
     private final Setting<String> receiptFormat = sgGeneral.add(new StringSetting.Builder()
         .name("formato-scontrino")
-        .description("Usa {earned} e {spent} come segnaposto.")
-        .defaultValue("Nell'ultima ora hai guadagnato €{earned} e hai speso €{spent}!!")
+        .description("Usa {earned}, {spent}, {sold_items}, {bought_items} come segnaposto.")
+        .defaultValue("Nell'ultima ora hai guadagnato €{earned} vendendo: {sold_items} e hai speso €{spent} acquistando: {bought_items}!!")
         .build()
     );
 
@@ -66,9 +69,15 @@ public class ShopTracker extends Module {
     private double spentThisPeriod = 0;
     private long lastReportTime = 0;
 
+    // item -> quantità totale, mantiene l'ordine di inserimento
+    private final Map<String, Integer> soldItemsThisPeriod = new LinkedHashMap<>();
+    private final Map<String, Integer> boughtItemsThisPeriod = new LinkedHashMap<>();
+
     // Rimuove tutto tranne lettere, numeri, spazi, virgole e punti (elimina simboli custom/colori del server)
     private static final Pattern CLEANUP = Pattern.compile("[^\\p{L}\\p{N}\\s.,]");
-    // Cerca il numero subito dopo la parola "per"
+    // Pattern completo: quantità, item, prezzo (es. "81 x Glowstone per 595.34")
+    private static final Pattern FULL_PATTERN = Pattern.compile("(?i)(\\d+)\\s*x\\s*(.+?)\\s*per\\s*([0-9.,]+)");
+    // Fallback: solo il prezzo, se il pattern completo non trova match (comportamento di prima, invariato)
     private static final Pattern PRICE_PATTERN = Pattern.compile("(?i)per\\s*([0-9.,]+)");
 
     public ShopTracker() {
@@ -79,11 +88,12 @@ public class ShopTracker extends Module {
     public void onActivate() {
         earnedThisPeriod = 0;
         spentThisPeriod = 0;
+        soldItemsThisPeriod.clear();
+        boughtItemsThisPeriod.clear();
         lastReportTime = System.currentTimeMillis();
     }
 
     private double parseAmount(String raw) {
-        // rimuove i separatori delle migliaia (virgola), tiene il punto come decimale
         String cleaned = raw.replace(",", "").trim();
         try {
             return Double.parseDouble(cleaned);
@@ -96,7 +106,6 @@ public class ShopTracker extends Module {
     private void onMessage(ReceiveMessageEvent event) {
         String raw = event.getMessage().getString();
 
-        // Pulisce il messaggio da simboli/colori custom del server
         String cleaned = CLEANUP.matcher(raw).replaceAll("").replaceAll("\\s+", " ").trim();
         String lower = cleaned.toLowerCase();
 
@@ -105,16 +114,47 @@ public class ShopTracker extends Module {
 
         if (!isSell && !isBuy) return;
 
+        Matcher fullMatch = FULL_PATTERN.matcher(cleaned);
+        if (fullMatch.find()) {
+            int qty;
+            try {
+                qty = Integer.parseInt(fullMatch.group(1));
+            } catch (NumberFormatException e) {
+                qty = 0;
+            }
+            String itemName = fullMatch.group(2).trim();
+            double amount = parseAmount(fullMatch.group(3));
+
+            if (isSell) {
+                earnedThisPeriod += amount;
+                soldItemsThisPeriod.merge(itemName, qty, Integer::sum);
+            } else {
+                spentThisPeriod += amount;
+                boughtItemsThisPeriod.merge(itemName, qty, Integer::sum);
+            }
+            return;
+        }
+
+        // Fallback: se il pattern completo non matcha, conta almeno il prezzo (come prima)
         Matcher priceMatch = PRICE_PATTERN.matcher(cleaned);
         if (!priceMatch.find()) return;
 
         double amount = parseAmount(priceMatch.group(1));
-
         if (isSell) {
             earnedThisPeriod += amount;
         } else {
             spentThisPeriod += amount;
         }
+    }
+
+    private String buildItemList(Map<String, Integer> items) {
+        if (items.isEmpty()) return "-";
+
+        StringJoiner joiner = new StringJoiner(", ");
+        for (Map.Entry<String, Integer> entry : items.entrySet()) {
+            joiner.add(entry.getValue() + "x " + entry.getKey());
+        }
+        return joiner.toString();
     }
 
     @EventHandler
@@ -126,7 +166,9 @@ public class ShopTracker extends Module {
             if (!silentIfNoActivity.get() || earnedThisPeriod > 0 || spentThisPeriod > 0) {
                 String out = receiptFormat.get()
                     .replace("{earned}", String.format("%.2f", earnedThisPeriod))
-                    .replace("{spent}", String.format("%.2f", spentThisPeriod));
+                    .replace("{spent}", String.format("%.2f", spentThisPeriod))
+                    .replace("{sold_items}", buildItemList(soldItemsThisPeriod))
+                    .replace("{bought_items}", buildItemList(boughtItemsThisPeriod));
 
                 if (sendToServer.get()) {
                     ChatUtils.sendPlayerMsg(out);
@@ -137,6 +179,8 @@ public class ShopTracker extends Module {
 
             earnedThisPeriod = 0;
             spentThisPeriod = 0;
+            soldItemsThisPeriod.clear();
+            boughtItemsThisPeriod.clear();
             lastReportTime = now;
         }
     }
