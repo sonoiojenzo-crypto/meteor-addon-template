@@ -36,16 +36,9 @@ public class ShopTracker extends Module {
     // ----- Impostazioni scontrino -----
     private final Setting<String> receiptFormat = sgGeneral.add(new StringSetting.Builder()
         .name("formato-scontrino")
-        .description("Usa {earned}, {spent}, {sold_items}, {bought_items} come segnaposto. \\n = a capo.")
+        .description("Usa {earned}, {spent}, {sold_items}, {bought_items} come segnaposto. Evita caratteri speciali/unicode e a-capo, causano kick per 'illegal characters'.")
         .defaultValue(
-            "╔══════ ೋღ☃ღೋ ══════╗\n" +
-            "Hai Guadagnato: €{earned}\n" +
-            "vendendo: {sold_items}\n" +
-            "--------------------------------------\n" +
-            "--------------------------------------\n" +
-            "Hai Speso: €{spent}\n" +
-            "acquistando: {bought_items}\n" +
-            "╚══════ ೋღ☃ღೋ ══════╝"
+            "[SCONTRINO] Guadagnato: €{earned} (vendendo: {sold_items}) -- Speso: €{spent} (acquistando: {bought_items})"
         )
         .build()
     );
@@ -61,7 +54,7 @@ public class ShopTracker extends Module {
 
     private final Setting<Boolean> sendToServer = sgGeneral.add(new BoolSetting.Builder()
         .name("invia-in-chat-pubblica")
-        .description("Se attivo manda lo scontrino come messaggio reale al server (visibile agli altri). Se disattivo, lo mostra solo a te. Consigliato tenerlo disattivato con lo scontrino a più righe.")
+        .description("Se attivo manda lo scontrino come messaggio reale al server (visibile agli altri). Se disattivo, lo mostra solo a te.")
         .defaultValue(false)
         .build()
     );
