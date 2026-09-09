@@ -36,8 +36,17 @@ public class ShopTracker extends Module {
     // ----- Impostazioni scontrino -----
     private final Setting<String> receiptFormat = sgGeneral.add(new StringSetting.Builder()
         .name("formato-scontrino")
-        .description("Usa {earned}, {spent}, {sold_items}, {bought_items} come segnaposto.")
-        .defaultValue("Nell'ultima ora hai guadagnato €{earned} vendendo: {sold_items} e hai speso €{spent} acquistando: {bought_items}!!")
+        .description("Usa {earned}, {spent}, {sold_items}, {bought_items} come segnaposto. \\n = a capo.")
+        .defaultValue(
+            "╔══════ ೋღ☃ღೋ ══════╗\n" +
+            "Hai Guadagnato: €{earned}\n" +
+            "vendendo: {sold_items}\n" +
+            "--------------------------------------\n" +
+            "--------------------------------------\n" +
+            "Hai Speso: €{spent}\n" +
+            "acquistando: {bought_items}\n" +
+            "╚══════ ೋღ☃ღೋ ══════╝"
+        )
         .build()
     );
 
@@ -52,7 +61,7 @@ public class ShopTracker extends Module {
 
     private final Setting<Boolean> sendToServer = sgGeneral.add(new BoolSetting.Builder()
         .name("invia-in-chat-pubblica")
-        .description("Se attivo manda lo scontrino come messaggio reale al server (visibile agli altri). Se disattivo, lo mostra solo a te.")
+        .description("Se attivo manda lo scontrino come messaggio reale al server (visibile agli altri). Se disattivo, lo mostra solo a te. Consigliato tenerlo disattivato con lo scontrino a più righe.")
         .defaultValue(false)
         .build()
     );
@@ -64,20 +73,40 @@ public class ShopTracker extends Module {
         .build()
     );
 
+    // ----- Impostazioni per nascondere un item specifico -----
+    private final Setting<Boolean> hideItemEnabled = sgGeneral.add(new BoolSetting.Builder()
+        .name("nascondi-item")
+        .description("Nasconde il nome di un item specifico nello scontrino.")
+        .defaultValue(true)
+        .build()
+    );
+
+    private final Setting<String> hiddenItemName = sgGeneral.add(new StringSetting.Builder()
+        .name("nome-item-da-nascondere")
+        .description("Nome dell'item da nascondere (non case-sensitive).")
+        .defaultValue("white wool")
+        .visible(hideItemEnabled::get)
+        .build()
+    );
+
+    private final Setting<String> hiddenItemReplacement = sgGeneral.add(new StringSetting.Builder()
+        .name("testo-sostitutivo")
+        .description("Testo da mostrare al posto del nome dell'item nascosto.")
+        .defaultValue("ITEM SEGRETO")
+        .visible(hideItemEnabled::get)
+        .build()
+    );
+
     // ----- Stato interno -----
     private double earnedThisPeriod = 0;
     private double spentThisPeriod = 0;
     private long lastReportTime = 0;
 
-    // item -> quantità totale, mantiene l'ordine di inserimento
     private final Map<String, Integer> soldItemsThisPeriod = new LinkedHashMap<>();
     private final Map<String, Integer> boughtItemsThisPeriod = new LinkedHashMap<>();
 
-    // Rimuove tutto tranne lettere, numeri, spazi, virgole e punti (elimina simboli custom/colori del server)
     private static final Pattern CLEANUP = Pattern.compile("[^\\p{L}\\p{N}\\s.,]");
-    // Pattern completo: quantità, item, prezzo (es. "81 x Glowstone per 595.34")
     private static final Pattern FULL_PATTERN = Pattern.compile("(?i)(\\d+)\\s*x\\s*(.+?)\\s*per\\s*([0-9.,]+)");
-    // Fallback: solo il prezzo, se il pattern completo non trova match (comportamento di prima, invariato)
     private static final Pattern PRICE_PATTERN = Pattern.compile("(?i)per\\s*([0-9.,]+)");
 
     public ShopTracker() {
@@ -135,7 +164,6 @@ public class ShopTracker extends Module {
             return;
         }
 
-        // Fallback: se il pattern completo non matcha, conta almeno il prezzo (come prima)
         Matcher priceMatch = PRICE_PATTERN.matcher(cleaned);
         if (!priceMatch.find()) return;
 
@@ -152,7 +180,13 @@ public class ShopTracker extends Module {
 
         StringJoiner joiner = new StringJoiner(", ");
         for (Map.Entry<String, Integer> entry : items.entrySet()) {
-            joiner.add(entry.getValue() + "x " + entry.getKey());
+            String displayName = entry.getKey();
+
+            if (hideItemEnabled.get() && displayName.equalsIgnoreCase(hiddenItemName.get())) {
+                displayName = hiddenItemReplacement.get();
+            }
+
+            joiner.add(entry.getValue() + "x " + displayName);
         }
         return joiner.toString();
     }
