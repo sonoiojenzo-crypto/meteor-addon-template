@@ -28,7 +28,6 @@ public class AddonTemplate extends MeteorAddon {
         Modules.get().add(new ModuleExample());
         Modules.get().add(new SheepEsp());
         Modules.get().add(new AutoSheepFarm());
-        Modules.get().add(new ShopTracker());
 
         // Commands
         Commands.add(new CommandExample());
