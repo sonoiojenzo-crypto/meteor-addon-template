@@ -1,6 +1,7 @@
 package com.example.addon.modules;
 
 import com.example.addon.AddonTemplate;
+import meteordevelopment.meteorclient.events.game.GameJoinedEvent;
 import meteordevelopment.meteorclient.events.world.TickEvent;
 import meteordevelopment.meteorclient.settings.*;
 import meteordevelopment.meteorclient.systems.modules.Module;
@@ -19,19 +20,19 @@ import net.minecraft.util.Hand;
 public class AutoSheepFarm extends Module {
     private final SettingGroup sgGeneral = settings.getDefaultGroup();
 
-    private final Setting<Double> radius = sgGeneral.add(new DoubleSetting.Builder()
-        .name("raggio")
-        .description("Raggio entro cui shearare direttamente una pecora.")
-        .defaultValue(6.0)
-        .min(1.0).max(20.0)
+    private final Setting<Double> interactRadius = sgGeneral.add(new DoubleSetting.Builder()
+        .name("raggio-interazione")
+        .description("Distanza massima per shearare in sicurezza (tienilo basso per evitare kick per reach).")
+        .defaultValue(3.0)
+        .min(1.0).max(4.5)
         .build()
     );
 
-    private final Setting<Double> wanderRadius = sgGeneral.add(new DoubleSetting.Builder()
+    private final Setting<Double> searchRadius = sgGeneral.add(new DoubleSetting.Builder()
         .name("raggio-ricerca")
         .description("Raggio entro cui cercare pecore lontane da raggiungere camminando.")
-        .defaultValue(20.0)
-        .min(1.0).max(64.0)
+        .defaultValue(40.0)
+        .min(5.0).max(64.0)
         .build()
     );
 
@@ -46,7 +47,7 @@ public class AutoSheepFarm extends Module {
     private final Setting<Integer> wanderTimeout = sgGeneral.add(new IntSetting.Builder()
         .name("timeout-ricerca")
         .description("Tick massimi spesi a camminare verso una pecora lontana prima di riprovare da capo (20 = 1 secondo).")
-        .defaultValue(100)
+        .defaultValue(200)
         .build()
     );
 
@@ -138,6 +139,13 @@ public class AutoSheepFarm extends Module {
         .build()
     );
 
+    private final Setting<Integer> maxWaitRetries = sgGeneral.add(new IntSetting.Builder()
+        .name("max-attese")
+        .description("Numero massimo di tentativi di attesa (GUI shop/vendita) prima di arrendersi e resettare.")
+        .defaultValue(15)
+        .build()
+    );
+
     private enum State {
         IDLE, WANDER, TARGETING, SHEAR, WAIT_AFTER_SHEAR, MOVE_TO_LOOT,
         OPEN_SHOP, WAIT_SHOP_OPEN, SEARCH_WOOL,
@@ -151,6 +159,7 @@ public class AutoSheepFarm extends Module {
     private int moveTicks = 0;
     private int wanderTicks = 0;
     private int pageAttempts = 0;
+    private int waitRetries = 0;
     private int foundWoolSlot = -1;
 
     public AutoSheepFarm() {
@@ -159,13 +168,26 @@ public class AutoSheepFarm extends Module {
 
     @Override
     public void onActivate() {
+        resetState();
+    }
+
+    // Resetta completamente il modulo: usato sia all'attivazione, sia ogni volta
+    // che ti connetti/riconnetti a un mondo, per evitare che resti bloccato
+    // in uno stato "congelato" da prima del rejoin.
+    private void resetState() {
         state = State.IDLE;
         target = null;
         delayTicks = 0;
         moveTicks = 0;
         wanderTicks = 0;
         pageAttempts = 0;
+        waitRetries = 0;
         foundWoolSlot = -1;
+    }
+
+    @EventHandler
+    private void onGameJoined(GameJoinedEvent event) {
+        resetState();
     }
 
     @EventHandler
@@ -198,29 +220,25 @@ public class AutoSheepFarm extends Module {
         }
     }
 
-    // Prima cerca una pecora valida vicina (pronta a shearare subito).
-    // Se non c'è, cerca una pecora valida più lontana e inizia a camminarci verso.
     private void handleIdle() {
-        Entity nearby = findValidSheep(radius.get());
+        Entity nearby = findValidSheep(interactRadius.get());
         if (nearby != null) {
             target = nearby;
             state = State.TARGETING;
             return;
         }
 
-        Entity far = findValidSheep(wanderRadius.get());
+        Entity far = findValidSheep(searchRadius.get());
         if (far != null) {
             target = far;
             wanderTicks = 0;
             state = State.WANDER;
         }
-        // se non trova nulla nemmeno nel raggio ampio, resta IDLE e riprova al prossimo tick
     }
 
-    // Cerca la pecora valida (non tosata, nome corrispondente) più vicina entro il raggio dato.
-    private Entity findValidSheep(double searchRadius) {
+    private Entity findValidSheep(double radius) {
         String needle = stackAmount.get() + "x";
-        double best = searchRadius * searchRadius;
+        double best = radius * radius;
         Entity found = null;
 
         for (Entity entity : mc.world.getEntities()) {
@@ -239,7 +257,6 @@ public class AutoSheepFarm extends Module {
         return found;
     }
 
-    // Cammina in linea retta verso la pecora bersaglio finché non è nel raggio di interazione.
     private void wander() {
         if (target == null || !target.isAlive() || (target instanceof SheepEntity s && s.isSheared())) {
             state = State.IDLE;
@@ -248,13 +265,12 @@ public class AutoSheepFarm extends Module {
 
         double dist = mc.player.distanceTo(target);
 
-        if (dist <= radius.get()) {
+        if (dist <= interactRadius.get()) {
             state = State.TARGETING;
             return;
         }
 
         if (wanderTicks >= wanderTimeout.get()) {
-            // bloccato troppo a lungo (probabile ostacolo): ferma tutto e riprova da capo
             target = null;
             state = State.IDLE;
             delayTicks = actionDelay.get() * 2;
@@ -286,7 +302,7 @@ public class AutoSheepFarm extends Module {
     }
 
     private void shear() {
-        if (target == null || !target.isAlive()) {
+        if (target == null || !target.isAlive() || mc.player.distanceTo(target) > interactRadius.get()) {
             state = State.IDLE;
             return;
         }
@@ -377,15 +393,22 @@ public class AutoSheepFarm extends Module {
         mc.player.networkHandler.sendChatCommand(shopCommand.get());
         delayTicks = actionDelay.get() * 3;
         pageAttempts = 0;
+        waitRetries = 0;
         state = State.WAIT_SHOP_OPEN;
     }
 
     private void checkShopOpen() {
         if (mc.currentScreen instanceof HandledScreen<?>) {
             state = State.SEARCH_WOOL;
-        } else {
-            delayTicks = actionDelay.get();
+            return;
         }
+
+        waitRetries++;
+        if (waitRetries >= maxWaitRetries.get()) {
+            resetState();
+            return;
+        }
+        delayTicks = actionDelay.get();
     }
 
     private void searchWool() {
@@ -430,15 +453,22 @@ public class AutoSheepFarm extends Module {
         mc.interactionManager.clickSlot(handler.syncId, foundWoolSlot, 1, SlotActionType.PICKUP, mc.player);
 
         delayTicks = actionDelay.get() * 2;
+        waitRetries = 0;
         state = State.WAIT_SELL_MENU;
     }
 
     private void checkSellMenuOpen() {
         if (mc.currentScreen instanceof HandledScreen<?>) {
             state = State.CONFIRM_SELL;
-        } else {
-            delayTicks = actionDelay.get();
+            return;
         }
+
+        waitRetries++;
+        if (waitRetries >= maxWaitRetries.get()) {
+            resetState();
+            return;
+        }
+        delayTicks = actionDelay.get();
     }
 
     private void confirmSell() {
