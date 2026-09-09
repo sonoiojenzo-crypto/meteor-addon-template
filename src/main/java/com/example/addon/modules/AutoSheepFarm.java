@@ -171,20 +171,22 @@ public class AutoSheepFarm extends Module {
         }
     }
 
+    // MODIFICATA: ora salta le pecore già tosate con sheep.isSheared()
     private void findTarget() {
         String needle = stackAmount.get() + "x";
         double best = radius.get() * radius.get();
         Entity found = null;
 
         for (Entity entity : mc.world.getEntities()) {
-            if (!(entity instanceof SheepEntity)) continue;
-            if (entity.getCustomName() == null) continue;
-            if (!entity.getCustomName().getString().contains(needle)) continue;
+            if (!(entity instanceof SheepEntity sheep)) continue;
+            if (sheep.isSheared()) continue;
+            if (sheep.getCustomName() == null) continue;
+            if (!sheep.getCustomName().getString().contains(needle)) continue;
 
-            double dist = mc.player.squaredDistanceTo(entity);
+            double dist = mc.player.squaredDistanceTo(sheep);
             if (dist <= best) {
                 best = dist;
-                found = entity;
+                found = sheep;
             }
         }
 
@@ -230,7 +232,6 @@ public class AutoSheepFarm extends Module {
         }
     }
 
-    // Cerca l'ItemEntity di lana caduta a terra più vicino, entro il raggio impostato.
     private Entity findNearestWoolItem() {
         String needle = woolName.get().toLowerCase();
         double best = lootSearchRadius.get() * lootSearchRadius.get();
@@ -253,8 +254,6 @@ public class AutoSheepFarm extends Module {
         return found;
     }
 
-    // Insegue la lana caduta a terra ricalcolando la posizione ogni tick,
-    // finché non è vicino abbastanza, non la trova più (raccolta), o scade il timeout.
     private void moveToLoot() {
         Entity woolItem = findNearestWoolItem();
 
@@ -281,8 +280,6 @@ public class AutoSheepFarm extends Module {
         moveTicks++;
     }
 
-    // Dopo il recupero: vende solo se hai EFFETTIVAMENTE lana in inventario,
-    // altrimenti torna subito a cercare un'altra pecora, senza aprire lo shop a vuoto.
     private void proceedAfterLoot() {
         state = hasWoolInInventory() ? State.OPEN_SHOP : State.IDLE;
     }
