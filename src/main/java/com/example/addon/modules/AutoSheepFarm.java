@@ -39,7 +39,7 @@ public class AutoSheepFarm extends Module {
     private final Setting<Double> wanderSpeed = sgGeneral.add(new DoubleSetting.Builder()
         .name("velocita-ricerca")
         .description("Velocità con cui ti sposti verso una pecora lontana.")
-        .defaultValue(0.22)
+        .defaultValue(0.28)
         .min(0.05).max(0.5)
         .build()
     );
@@ -68,7 +68,7 @@ public class AutoSheepFarm extends Module {
 
     private final Setting<Integer> scanInterval = sgGeneral.add(new IntSetting.Builder()
         .name("intervallo-scansione")
-        .description("Ogni quanti tick rifare le ricerche pesanti (entità nel mondo). Più alto = meno carico, meno reattivo.")
+        .description("Ogni quanti tick rifare le ricerche pesanti. Più alto = meno carico, meno reattivo.")
         .defaultValue(4)
         .min(1).max(20)
         .build()
@@ -127,7 +127,7 @@ public class AutoSheepFarm extends Module {
     private final Setting<Double> moveSpeed = sgGeneral.add(new DoubleSetting.Builder()
         .name("velocita-recupero")
         .description("Velocità con cui ti sposti verso la lana caduta.")
-        .defaultValue(0.25)
+        .defaultValue(0.28)
         .min(0.05).max(0.5)
         .build()
     );
@@ -173,7 +173,7 @@ public class AutoSheepFarm extends Module {
     private int foundWoolSlot = -1;
 
     public AutoSheepFarm() {
-        super(AddonTemplate.CATEGORY, "auto-sheep-farm", "Cerca pecore a stack pieno, le sheara, recupera la lana e la vende.");
+        super(AddonTemplate.CATEGORY, "auto-sheep-farm", "Cerca pecore a stack pieno, le sheara, riempie l'inventario e vende tutto.");
     }
 
     @Override
@@ -192,6 +192,7 @@ public class AutoSheepFarm extends Module {
         waitRetries = 0;
         scanCooldown = 0;
         foundWoolSlot = -1;
+        if (mc.player != null) mc.player.setSprinting(false);
     }
 
     @EventHandler
@@ -229,9 +230,8 @@ public class AutoSheepFarm extends Module {
         }
     }
 
-    // Ordine di priorità: 1) lana a terra vicina, 2) lana già in inventario da vendere,
-    // 3) solo alla fine cerca una nuova pecora. Così anche dopo un rejoin/kick,
-    // il modulo prima "pulisce" quello che era rimasto indietro invece di ignorarlo.
+    // Priorità: 1) lana a terra vicina, 2) inventario PIENO da vendere,
+    // 3) altrimenti cerca un'altra pecora (continua a riempire l'inventario).
     private void handleIdle() {
         if (scanCooldown > 0) {
             scanCooldown--;
@@ -247,7 +247,7 @@ public class AutoSheepFarm extends Module {
             return;
         }
 
-        if (hasWoolInInventory()) {
+        if (isInventoryFull()) {
             state = State.OPEN_SHOP;
             return;
         }
@@ -290,6 +290,7 @@ public class AutoSheepFarm extends Module {
 
     private void wander() {
         if (target == null || !target.isAlive() || (target instanceof SheepEntity s && s.isSheared())) {
+            mc.player.setSprinting(false);
             state = State.IDLE;
             return;
         }
@@ -297,11 +298,13 @@ public class AutoSheepFarm extends Module {
         double dist = mc.player.distanceTo(target);
 
         if (dist <= interactRadius.get()) {
+            mc.player.setSprinting(false);
             state = State.TARGETING;
             return;
         }
 
         if (wanderTicks >= wanderTimeout.get()) {
+            mc.player.setSprinting(false);
             target = null;
             state = State.IDLE;
             delayTicks = actionDelay.get() * 2;
@@ -313,6 +316,7 @@ public class AutoSheepFarm extends Module {
         double horizDist = Math.sqrt(dx * dx + dz * dz);
 
         if (horizDist > 0.001) {
+            mc.player.setSprinting(true);
             double speed = wanderSpeed.get();
             mc.player.setVelocity((dx / horizDist) * speed, mc.player.getVelocity().y, (dz / horizDist) * speed);
         }
@@ -378,8 +382,6 @@ public class AutoSheepFarm extends Module {
         return found;
     }
 
-    // Ricalcola la posizione della lana solo ogni "intervallo-scansione" tick invece
-    // che ad ogni singolo tick, per ridurre il carico sul dispositivo.
     private void moveToLoot() {
         if (scanCooldown <= 0) {
             cachedLootItem = findNearestWoolItem();
@@ -391,6 +393,7 @@ public class AutoSheepFarm extends Module {
         Entity woolItem = cachedLootItem;
 
         if (woolItem == null || !woolItem.isAlive() || moveTicks >= moveTimeout.get()) {
+            mc.player.setSprinting(false);
             delayTicks = actionDelay.get();
             proceedAfterLoot();
             return;
@@ -401,6 +404,7 @@ public class AutoSheepFarm extends Module {
         double distSq = dx * dx + dz * dz;
 
         if (distSq <= arrivalDistance.get() * arrivalDistance.get()) {
+            mc.player.setSprinting(false);
             delayTicks = actionDelay.get();
             proceedAfterLoot();
             return;
@@ -409,24 +413,21 @@ public class AutoSheepFarm extends Module {
         double dist = Math.sqrt(distSq);
         double speed = moveSpeed.get();
 
+        mc.player.setSprinting(true);
         mc.player.setVelocity((dx / dist) * speed, mc.player.getVelocity().y, (dz / dist) * speed);
         moveTicks++;
     }
 
+    // Vende solo quando l'inventario è EFFETTIVAMENTE pieno, altrimenti torna a cercare pecore.
     private void proceedAfterLoot() {
-        state = hasWoolInInventory() ? State.OPEN_SHOP : State.IDLE;
+        state = isInventoryFull() ? State.OPEN_SHOP : State.IDLE;
     }
 
-    private boolean hasWoolInInventory() {
-        String needle = woolName.get().toLowerCase();
-
+    private boolean isInventoryFull() {
         for (int i = 0; i < 36; i++) {
-            ItemStack stack = mc.player.getInventory().getStack(i);
-            if (stack.isEmpty()) continue;
-            if (stack.getName().getString().toLowerCase().contains(needle)) return true;
+            if (mc.player.getInventory().getStack(i).isEmpty()) return false;
         }
-
-        return false;
+        return true;
     }
 
     private void openShop() {
