@@ -1,4 +1,3 @@
-
 package com.example.addon.modules;
 
 import com.example.addon.AddonTemplate;
@@ -42,15 +41,32 @@ public class SheepEsp extends Module {
         .build()
     );
 
+    private final Setting<Double> countRadius = sgGeneral.add(new DoubleSetting.Builder()
+        .name("raggio-conteggio")
+        .description("Raggio entro cui contare le pecore rilevate (mostrato accanto al nome del modulo).")
+        .defaultValue(16.0)
+        .min(1.0).max(128.0)
+        .build()
+    );
+
+    private int sheepCount = 0;
+
     public SheepEsp() {
         super(AddonTemplate.CATEGORY, "sheep-esp", "Evidenzia le pecore attraverso i muri.");
     }
 
     @EventHandler
     private void onRender3D(Render3DEvent event) {
+        int count = 0;
+        double radiusSq = countRadius.get() * countRadius.get();
+
         for (var entity : mc.world.getEntities()) {
             if (!(entity instanceof SheepEntity sheep)) continue;
             if (onlyColoredSheep.get() && sheep.getColor().getId() == 15) continue; // 15 = bianco/default
+
+            if (mc.player != null && mc.player.squaredDistanceTo(sheep) <= radiusSq) {
+                count++;
+            }
 
             Box box = sheep.getBoundingBox();
 
@@ -67,5 +83,12 @@ public class SheepEsp extends Module {
                 shapeMode.get(), 0
             );
         }
+
+        sheepCount = count;
+    }
+
+    @Override
+    public String getInfoString() {
+        return String.valueOf(sheepCount);
     }
 }
