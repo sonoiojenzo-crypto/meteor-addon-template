@@ -16,8 +16,8 @@ import org.slf4j.Logger;
 
 public class AddonTemplate extends MeteorAddon {
     public static final Logger LOG = LogUtils.getLogger();
-    public static final Category CATEGORY = new Category("Jenzoh's Modules");
-    public static final HudGroup HUD_GROUP = new HudGroup("Jenzoh's Modules");
+    public static final Category CATEGORY = new Category("Progetto Pecure");
+    public static final HudGroup HUD_GROUP = new HudGroup("Progetto Pecure");
 
     @Override
     public void onInitialize() {
