@@ -2,8 +2,8 @@ package com.example.addon;
 
 import com.example.addon.commands.CommandExample;
 import com.example.addon.hud.HudExample;
-import com.example.addon.hud.ShopTrackerHud;
-import com.example.addon.modules.ShopTracker;
+import com.example.addon.modules.AutoSheepFarm;
+import com.example.addon.modules.SheepEsp;
 import com.mojang.logging.LogUtils;
 import meteordevelopment.meteorclient.addons.GithubRepo;
 import meteordevelopment.meteorclient.addons.MeteorAddon;
@@ -16,15 +16,14 @@ import org.slf4j.Logger;
 
 public class AddonTemplate extends MeteorAddon {
     public static final Logger LOG = LogUtils.getLogger();
-    public static final Category CATEGORY = new Category("JenzohClient");
-    public static final HudGroup HUD_GROUP = new HudGroup("JenzohClient");
+    public static final Category CATEGORY = new Category("Progetto Pecure");
+    public static final HudGroup HUD_GROUP = new HudGroup("Progetto Pecure");
 
     @Override
     public void onInitialize() {
         LOG.info("Initializing Meteor Addon Template");
 
         // Modules
-        Modules.get().add(new ShopTracker());
         Modules.get().add(new SheepEsp());
         Modules.get().add(new AutoSheepFarm());
 
@@ -33,7 +32,6 @@ public class AddonTemplate extends MeteorAddon {
 
         // HUD
         Hud.get().register(HudExample.INFO);
-        Hud.get().register(ShopTrackerHud.INFO);
     }
 
     @Override
