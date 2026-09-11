@@ -43,7 +43,7 @@ public class SheepEsp extends Module {
 
     private final Setting<Double> countRadius = sgGeneral.add(new DoubleSetting.Builder()
         .name("raggio-conteggio")
-        .description("Raggio entro cui contare le pecore rilevate (mostrato accanto al nome del modulo).")
+        .description("Raggio entro cui contare le pecore rilevate (usato dall'HUD).")
         .defaultValue(16.0)
         .min(1.0).max(128.0)
         .build()
@@ -53,6 +53,11 @@ public class SheepEsp extends Module {
 
     public SheepEsp() {
         super(AddonTemplate.CATEGORY, "sheep-esp", "Evidenzia le pecore attraverso i muri.");
+    }
+
+    // Letto dall'HUD SheepCountHud per mostrare il numero a schermo.
+    public int getSheepCount() {
+        return sheepCount;
     }
 
     @EventHandler
@@ -85,10 +90,5 @@ public class SheepEsp extends Module {
         }
 
         sheepCount = count;
-    }
-
-    @Override
-    public String getInfoString() {
-        return String.valueOf(sheepCount);
     }
 }
