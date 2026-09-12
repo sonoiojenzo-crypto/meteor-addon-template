@@ -36,6 +36,14 @@ public class AutoSheepFarm extends Module {
         .build()
     );
 
+    private final Setting<Double> maxYDifference = sgGeneral.add(new DoubleSetting.Builder()
+        .name("differenza-y-massima")
+        .description("Ignora pecore e lana caduta a un'altezza (Y) troppo diversa dalla tua, utile per farm a più piani.")
+        .defaultValue(4.0)
+        .min(1.0).max(50.0)
+        .build()
+    );
+
     private final Setting<Double> wanderSpeed = sgGeneral.add(new DoubleSetting.Builder()
         .name("velocita-ricerca")
         .description("Velocità con cui ti sposti verso una pecora lontana.")
@@ -230,8 +238,6 @@ public class AutoSheepFarm extends Module {
         }
     }
 
-    // Priorità: 1) lana a terra vicina, 2) inventario PIENO da vendere,
-    // 3) altrimenti cerca un'altra pecora (continua a riempire l'inventario).
     private void handleIdle() {
         if (scanCooldown > 0) {
             scanCooldown--;
@@ -267,6 +273,7 @@ public class AutoSheepFarm extends Module {
         }
     }
 
+    // MODIFICATA: ora ignora le pecore troppo distanti in altezza (Y), utile per farm a più piani.
     private Entity findValidSheep(double radius) {
         String needle = stackAmount.get() + "x";
         double best = radius * radius;
@@ -277,6 +284,7 @@ public class AutoSheepFarm extends Module {
             if (sheep.isSheared()) continue;
             if (sheep.getCustomName() == null) continue;
             if (!sheep.getCustomName().getString().contains(needle)) continue;
+            if (Math.abs(sheep.getY() - mc.player.getY()) > maxYDifference.get()) continue;
 
             double dist = mc.player.squaredDistanceTo(sheep);
             if (dist <= best) {
@@ -360,6 +368,7 @@ public class AutoSheepFarm extends Module {
         }
     }
 
+    // MODIFICATA: ora ignora anche la lana caduta a un'altezza (Y) troppo diversa dalla tua.
     private Entity findNearestWoolItem() {
         String needle = woolName.get().toLowerCase();
         double best = lootSearchRadius.get() * lootSearchRadius.get();
@@ -367,6 +376,7 @@ public class AutoSheepFarm extends Module {
 
         for (Entity entity : mc.world.getEntities()) {
             if (!(entity instanceof ItemEntity itemEntity)) continue;
+            if (Math.abs(itemEntity.getY() - mc.player.getY()) > maxYDifference.get()) continue;
 
             ItemStack stack = itemEntity.getStack();
             if (stack.isEmpty()) continue;
@@ -418,7 +428,6 @@ public class AutoSheepFarm extends Module {
         moveTicks++;
     }
 
-    // Vende solo quando l'inventario è EFFETTIVAMENTE pieno, altrimenti torna a cercare pecore.
     private void proceedAfterLoot() {
         state = isInventoryFull() ? State.OPEN_SHOP : State.IDLE;
     }
